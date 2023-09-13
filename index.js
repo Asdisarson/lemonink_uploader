@@ -8,7 +8,7 @@ const options = {
     path: '/v1/masters',
     method: 'POST',
     headers: {
-        'Authorization': 'Token token=change-to-your-api-key',
+        'Authorization': 'Token token=du5arTDf1Q2Xnz1fl76n+A==',
         'Content-Type': 'application/json'
     }
 };
