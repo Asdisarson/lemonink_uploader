@@ -19,9 +19,18 @@ async function makeRequest() {
 
             const response = await axios.request(config);
             console.log(i)
-            // Push the response string data to allResponses array
-            allResponses.set(id, response.data); // you may also want to add `null, 2` params if you want pretty JSON
+            //Get storage_uuid from response data using Nullish coalescing operator (?.)
+            let storage_uuid = response.data.epub?.storage_uuid;
 
+//Check if response.data is not empty and if storage_uuid exists
+            if(response.data && storage_uuid){
+                //if response is not empty and storage_uuid exists then set it in allResponses
+                allResponses.set(storage_uuid, response.data); // you may also want to add `null, 2` params if you want pretty JSON
+            }// you may also want to add `null, 2` params if you want pretty JSON
+            else {
+                // Push the response string data to allResponses array
+                allResponses.set(id, response.data);
+            }
         }
         allResponses.sync();
         // Save all responses to a single JSON file
