@@ -1,140 +1,111 @@
 require('dotenv').config();
-const fetch = require('node-fetch');
-const FormData = require('form-data');
-const fs = require('fs');
-const csvParser = require('csv-parser');
-const winston = require('winston'); // logging library
 
-const API_KEY = process.env.API_KEY || "";
+const axios = require('axios');
+const fs = require('fs');
+const FormData = require('form-data');
+const jsonDB = require('simple-json-db');
+// Replace this with your API key from LemonInk
+const API_KEY = process.env.API_KEY;
+
+// Base URL for LemonInk API
 const BASE_URL = 'https://api.lemonink.co/v1';
 
-const JSON_HEADERS = {
-    Authorization: `Token token=${API_KEY}`,
-    'Content-Type': 'application/json',
+// Common headers for JSON requests
+const jsonHeaders = {
+    'Authorization': `Token token=${API_KEY}`,
+    'Content-Type': 'application/json'
 };
 
-const db = {};
-
-// Configure winston to log to both the console and file system
-const logger = winston.createLogger({
-    level: 'info',
-    format: winston.format.json(),
-    transports: [
-        new winston.transports.File({ filename: 'error.log', level: 'error' }),
-        new winston.transports.File({ filename: 'combined.log' }),
-    ],
-});
-
-async function createMaster(name) {
+// Create a Master File
+async function createMaster() {
     try {
-        const url = `${BASE_URL}/masters`;
-        const payload = { master: { name } };
-        const response = await fetch(url, {
-            method: 'POST',
-            body: JSON.stringify(payload),
-            headers: JSON_HEADERS,
+        const response = await axios.post(`${BASE_URL}/masters`, {
+            master: {
+                name: key.epub.title
+            }
+        }, {
+            headers: jsonHeaders
         });
-        if (!response.ok) {
-            throw new Error(`HTTP error! status: ${response.status}`);
-        }
-        return [await response.json()];
+        return response.data.master.id;
     } catch (error) {
-        logger.error('Error in createMaster:', error);
-        throw error;
+        console.error('Error creating master:', error);
     }
 }
 
-async function attachFiles(masterId, filePath, fileName) {
+// Attach a File to the Master
+async function attachFileToMaster(masterId,key) {
     try {
-        console.log(`Master ID: ${masterId}, File Path: ${filePath}, File Name: ${fileName}`);
-
-        const url = `${BASE_URL}/master_files`;
         const form = new FormData();
         form.append('master_file[master_id]', masterId);
-        form.append('master_file[file]', fs.createReadStream(filePath));
-        form.append('master_file[name]', fileName);
+        form.append('master_file[file]', fs.createReadStream(key.epub.storage_uuid.epub));
+        form.append('master_file[name]', key.epub.storage_uuid+'.epub');
 
-        const headers = {
-            ...form.getHeaders(),
-            Authorization: `Token token=${API_KEY}`,
-        };
-
-        const response = await fetch(url, {
-            method: 'POST',
-            body: form,
-            headers: headers,
+        const response = await axios.post(`${BASE_URL}/master_files`, form, {
+            headers: {
+                ...form.getHeaders(),
+                'Authorization': `Token token=${API_KEY}`
+            }
         });
-
-        if (!response.ok) {
-            throw new Error(`HTTP error! status: ${response.status}`);
-        }
-
-        return [await response.json()];
+        return response.data.master_file.id;
     } catch (error) {
-        logger.error('Error in attachFiles:', error);
-        throw error;
+        console.error('Error attaching file to master:', error);
     }
 }
 
-function readCSVFile(filePath) {
-    return new Promise((resolve, reject) => {
-        const books = [];
-        fs.createReadStream(filePath)
-            .pipe(csvParser())
-            .on('data', (row) => books.push(row))
-            .on('end', () => resolve(books))
-            .on('error', err => {
-                logger.error('Error in readCSVFile:', err);
-                reject(err);
-            });
-    });
+// Watermark a File
+async function watermarkFile(masterId) {
+    try {
+        const response = await axios.post(`${BASE_URL}/transactions`, {
+            transaction: {
+                master_id: masterId,
+                watermark_value: "A text that will be inserted into the file"
+            }
+        }, {
+            headers: jsonHeaders
+        });
+        return response.data.transaction.id;
+    } catch (error) {
+        console.error('Error watermarking file:', error);
+    }
 }
 
-(async function main() {
-    try {
-        const books = await readCSVFile('./input.csv');
-        const csvOutput = ["name,epub_uuid,master_id"];
+// Construct Delivery URL
+function constructDeliveryURL(transactionId, format) {
+    return `https://dl.lemonink.co/transactions/${transactionId}/${transactionId}.${format}`;
+}
 
-        for (const book of books) {
-            if (!book.hasOwnProperty('epub_uuid') || !book['epub_uuid']) {
-                logger.error(`The epub_uuid property does not exist or is empty for this book: ${JSON.stringify(book, null, 2)}`);
-                continue;
-            }
+// Main Function to Execute All Steps
+(async () => {
+    let json = new jsonDB('./jsonDB.json')
+    let db = json.JSON();
+    const fs = require('fs').promises;
 
-            const fullPath = `storage/${book['epub_uuid']}.epub`;
+    async function processFile() {
+        try {
+            const data = await fs.readFile('epubFiles.csv', 'utf8');
 
-            try {
-                const masterResponse = await createMaster(book['Title']);
-                if (!masterResponse || !masterResponse[0].master) {
-                    logger.error(`Failed to create Master for book: ${JSON.stringify(book, null, 2)}`);
-                    continue;
-                }
+            const lines = data.split('\n');
 
-                const masterId = masterResponse[0].master.id;
-                logger.info(`Created Master ID: ${masterId}`);
+            const result = lines.slice(1).map(line => {
+                const [location, filenameWithExtension, epub_uuid] = line.split(',');
+                return { location, filenameWithExtension, epub_uuid };
+            });
 
-                const attachResponse = await attachFiles(masterId, fullPath, book['epub_uuid']);
-                if (!attachResponse) {
-                    logger.error(`Failed to attach files for Master ID: ${masterId} and book: ${JSON.stringify(book, null, 2)}`);
-                    continue;
-                }
-                logger.info(`Attached File: ${JSON.stringify(attachResponse[0], null, 2)}`);
+            console.log(JSON.stringify(result, null, 2));
 
-                db[book['Title']] = {
-                    masterId,
-                    attachResponse: attachResponse[0],
-                };
-
-                csvOutput.push(`${book['Title']},${book['epub_uuid']},${masterId}`);
-            } catch (error) {
-                logger.error(`An error occurred processing book: ${JSON.stringify(book, null, 2)} - Error: ${JSON.stringify(error, null, 2)}`);
-            }
+        } catch (err) {
+            console.error('Error reading file:', err);
         }
+    }
 
-        fs.writeFileSync('database.json', JSON.stringify(db, null, 2));
-        fs.writeFileSync('output.csv', csvOutput.join('\n'));
+    let item = await processFile();
+    if(item?.epub) {
+        item = db.get(item.epub.epub_uuid)
 
-    } catch (error) {
-        logger.error('Error in main:', error);
+        const masterId = await createMaster(item);
+        console.log(`Master ID: ${masterId}`);
+
+        const masterFileId = await attachFileToMaster(masterId, item);
+        console.log(`Master File ID: ${masterFileId}`);
     }
 })();
